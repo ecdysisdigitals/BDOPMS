@@ -2426,6 +2426,9 @@
             // Set current project ID
             document.getElementById('projectDetailView').setAttribute('data-project-id', project._id);
             
+            // Load chat messages for this project
+            loadProjectChatRealtime(project._id);
+            
             // Get user key (admin-user or current user's UID)
             const isAdmin = localStorage.getItem('isAdmin') === 'true';
             const userKey = isAdmin ? 'admin-user' : (firebase.auth().currentUser ? firebase.auth().currentUser.uid : null);
@@ -2512,31 +2515,47 @@
         }
 
         function loadProjectChatRealtime(projectId) {
-            const isAdmin = localStorage.getItem('isAdmin') === 'true';
-            const userKey = isAdmin ? 'admin-user' : (firebase.auth().currentUser ? firebase.auth().currentUser.uid : null);
             const chatList = document.getElementById('projectChatMessages');
-            if (!userKey) {
-                chatList.innerHTML = '<div style="color: #d32f2f;">User not found</div>';
-                return;
-            }
-            const chatRef = firebase.database().ref(`projects/${userKey}/${projectId}/messages`).limitToLast(100);
+            if (!chatList) return;
+            const chatRef = firebase.database().ref(`projects/admin-user/${projectId}/messages`).limitToLast(100);
             chatRef.off(); // Remove previous listeners
             chatRef.on('value', (snapshot) => {
                 const messages = snapshot.val() || {};
                 if (Object.keys(messages).length === 0) {
-                    chatList.innerHTML = '<div style="color: #666;">No messages yet.</div>';
+                    chatList.innerHTML = '<div style="color: #666; text-align: center; padding: 20px;">No messages yet. Start the conversation!</div>';
                     return;
                 }
-                chatList.innerHTML = Object.keys(messages).map(msgId => {
-                    const msg = messages[msgId];
+                // Convert messages object to array and sort by timestamp
+                const messagesArray = Object.entries(messages).map(([id, msg]) => ({
+                    id,
+                    ...msg
+                })).sort((a, b) => a.timestamp - b.timestamp);
+                // Generate HTML for messages
+                const html = messagesArray.map(msg => {
+                    const isCurrentUser = msg.sender === (firebase.auth().currentUser?.email || localStorage.getItem('userEmail'));
+                    const messageTime = new Date(msg.timestamp).toLocaleTimeString();
+                    const messageDate = new Date(msg.timestamp).toLocaleDateString();
                     return `
-                        <div style="margin-bottom: 10px;">
-                            <span style="font-weight: 500; color: #1976d2;">${msg.sender || 'User'}</span>
-                            <span style="font-size: 12px; color: #888; margin-left: 8px;">${msg.timestamp ? new Date(msg.timestamp).toLocaleString() : ''}</span>
-                            <div style="font-size: 15px; color: #222; margin-top: 2px;">${msg.text || ''}</div>
+                        <div style="margin-bottom: 16px; display: flex; flex-direction: ${isCurrentUser ? 'row-reverse' : 'row'};">
+                            <div style="max-width: 70%;">
+                                <div style="background: ${isCurrentUser ? '#1976d2' : '#f0f0f0'}; 
+                                            color: ${isCurrentUser ? '#fff' : '#333'}; 
+                                            padding: 12px 16px; 
+                                            border-radius: 12px; 
+                                            margin-bottom: 4px;
+                                            word-wrap: break-word;">
+                                    ${msg.text}
+                                </div>
+                                <div style="font-size: 12px; color: #666; text-align: ${isCurrentUser ? 'right' : 'left'};">
+                                    <span style="font-weight: 500;">${msg.sender}</span>
+                                    <span style="margin: 0 4px;">•</span>
+                                    <span>${messageDate} ${messageTime}</span>
+                                </div>
+                            </div>
                         </div>
                     `;
                 }).join('');
+                chatList.innerHTML = html;
                 chatList.scrollTop = chatList.scrollHeight;
             });
         }
@@ -2546,19 +2565,27 @@
             const text = input.value.trim();
             if (!text) return;
             const projectId = document.getElementById('projectDetailView').getAttribute('data-project-id');
-            const isAdmin = localStorage.getItem('isAdmin') === 'true';
-            const userKey = isAdmin ? 'admin-user' : (firebase.auth().currentUser ? firebase.auth().currentUser.uid : null);
-            const sender = document.getElementById('sidebarUserName').textContent || 'User';
-            if (!userKey || !projectId) return;
-            const chatRef = firebase.database().ref(`projects/${userKey}/${projectId}/messages`);
-            const newMsg = {
+            if (!projectId) return;
+            // Get current user info
+            const currentUser = firebase.auth().currentUser;
+            const userEmail = currentUser?.email || localStorage.getItem('userEmail');
+            const userName = document.getElementById('sidebarUserName').textContent || userEmail;
+            // Create message object
+            const messageData = {
                 text: text,
-                sender: sender,
+                sender: userName,
+                senderEmail: userEmail,
                 timestamp: Date.now()
             };
-            chatRef.push(newMsg).then(() => {
-                input.value = '';
-            });
+            // Save message to database using admin path
+            firebase.database().ref(`projects/admin-user/${projectId}/messages`).push(messageData)
+                .then(() => {
+                    input.value = '';
+                })
+                .catch(error => {
+                    console.error('Error sending message:', error);
+                    alert('Failed to send message. Please try again.');
+                });
         }
 
         // Function to load team members
