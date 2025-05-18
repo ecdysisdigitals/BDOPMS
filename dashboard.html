@@ -2381,19 +2381,46 @@
                     const projectName = (project && project.name) ? project.name.replace(/[^a-zA-Z0-9-_]/g, '_') : 'Project';
                     const today = new Date();
                     const dateStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
-                    const filename = `${projectName}-${dateStr}.csv`;
+                    const filename = `${projectName}-budget-transactions-${dateStr}.csv`;
                     
                     firebase.database().ref('projects/admin-user/' + projectId + '/budgetHistory').once('value').then(snapshot => {
                         const data = snapshot.val() || {};
-                        let csv = 'Date,Budget Deducted,Reason for Deduction\n';
+                        // New CSV header: Date,Type,Amount,Reason,Updated By
+                        let csv = 'Date,Type,Amount,Reason,Updated By\n';
                         Object.values(data).forEach(entry => {
-                            const date = new Date(entry.date);
+                            const date = new Date(entry.date || entry.timestamp || entry.createdAt || Date.now());
                             const formattedDate = date.toLocaleDateString();
-                            const deduction = entry.deduction ? `-${entry.deduction}` : '';
-                            const reason = entry.reason ? `"${entry.reason.replace(/"/g, '""')}"` : '';
-                            csv += `${formattedDate},${deduction},${reason}\n`;
+                            let type = '';
+                            let amount = '';
+                            let reason = '';
+                            let updatedBy = '';
+                            // Determine type and amount
+                            if (entry.operation === 'add' || entry.amount > 0) {
+                                type = 'Add';
+                                amount = entry.amount || entry.added || '';
+                            } else if (entry.operation === 'subtract' || entry.deducted > 0) {
+                                type = 'Lessen';
+                                amount = entry.deducted || entry.amount || '';
+                            } else if (entry.amount < 0) {
+                                type = 'Lessen';
+                                amount = Math.abs(entry.amount);
+                            }
+                            // Fallback for legacy entries
+                            if (!type && entry.deducted) {
+                                type = 'Lessen';
+                                amount = entry.deducted;
+                            }
+                            if (!type && entry.added) {
+                                type = 'Add';
+                                amount = entry.added;
+                            }
+                            reason = entry.purpose || entry.reason || '';
+                            updatedBy = entry.updatedBy || entry.deductedBy || '';
+                            // Only include if type and amount are present
+                            if (type && amount) {
+                                csv += `${formattedDate},${type},${amount},"${reason.replace(/"/g, '""')}","${updatedBy.replace(/"/g, '""')}"\n`;
+                            }
                         });
-                        
                         // Download CSV
                         const blob = new Blob([csv], {type: 'text/csv'});
                         const url = URL.createObjectURL(blob);
