@@ -11,6 +11,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-storage-compat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         // Your web app's Firebase configuration
         const firebaseConfig = {
@@ -154,6 +155,97 @@
             // You might need to modify this based on how you're tracking the current project
             return window.currentProjectId;
         }
+
+        // Project Creation Trend Chart
+        function loadProjectCreationTrendChart() {
+            const ctx = document.getElementById('projectCreationTrendChart').getContext('2d');
+            const userKey = localStorage.getItem('isAdmin') === 'true' ? 'admin-user' : (firebase.auth().currentUser ? firebase.auth().currentUser.uid : null);
+            
+            if (!userKey) {
+                console.error('User not authenticated');
+                return;
+            }
+
+            // Get all projects
+            firebase.database().ref(`projects/${userKey}`).once('value')
+                .then((snapshot) => {
+                    const projects = snapshot.val() || {};
+                    
+                    // Create a map to store projects by month
+                    const projectsByMonth = {};
+                    
+                    // Process each project
+                    Object.values(projects).forEach(project => {
+                        if (project.createdAt) {
+                            const date = new Date(project.createdAt);
+                            const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                            
+                            if (!projectsByMonth[monthYear]) {
+                                projectsByMonth[monthYear] = 0;
+                            }
+                            projectsByMonth[monthYear]++;
+                        }
+                    });
+
+                    // Sort months chronologically
+                    const sortedMonths = Object.keys(projectsByMonth).sort();
+                    
+                    // Prepare data for the chart
+                    const labels = sortedMonths.map(month => {
+                        const [year, monthNum] = month.split('-');
+                        return new Date(year, monthNum - 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                    });
+                    
+                    const data = sortedMonths.map(month => projectsByMonth[month]);
+
+                    // Create the chart
+                    new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Projects Created',
+                                data: data,
+                                borderColor: '#2196F3',
+                                backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                                tension: 0.4,
+                                fill: true
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: 'Project Creation Trend',
+                                    font: {
+                                        size: 16
+                                    }
+                                },
+                                legend: {
+                                    display: false
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        stepSize: 1
+                                    }
+                                }
+                            }
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading project creation trend:', error);
+                });
+        }
+
+        // Call the function when the page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            loadProjectCreationTrendChart();
+        });
     </script>
     <style>
         * {
@@ -472,6 +564,31 @@
             padding: 0 16px;
             cursor: pointer;
         }
+
+        .analytics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .analytics-card {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .analytics-card h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
     </style>
     <!-- Add this to ensure the email is visible -->
     <style>
@@ -576,8 +693,15 @@
                 </div>
                 <!-- Analytics Section -->
                 <div id="analytics-section" style="display:none;">
-                    <div style="background:#fff; border:1px solid #bbb; border-radius:12px; padding:32px; min-height:300px; display:flex; align-items:center; justify-content:center;">
-                        <span style="font-size:22px; color:#888;">Analytics content goes here (charts, stats, etc.)</span>
+                    <h2>Analytics</h2>
+                    <div class="analytics-grid">
+                        <div class="analytics-card">
+                            <h3>Project Creation Trend</h3>
+                            <div class="chart-container">
+                                <canvas id="projectCreationTrendChart"></canvas>
+                            </div>
+                        </div>
+                        <!-- Other analytics cards -->
                     </div>
                 </div>
             </div>
