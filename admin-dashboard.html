@@ -26,6 +26,134 @@
 
         // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
+
+        // Budget Management Functions
+        function toggleBudgetEdit() {
+            const budgetEditSection = document.getElementById('budgetEditSection');
+            const currentBudget = document.getElementById('pd-budget').textContent;
+            document.getElementById('currentBudgetDisplay').textContent = currentBudget;
+            budgetEditSection.style.display = budgetEditSection.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function cancelBudgetEdit() {
+            document.getElementById('budgetEditSection').style.display = 'none';
+            document.getElementById('budgetAdjustment').value = '';
+            document.getElementById('budgetEditMessage').textContent = '';
+        }
+
+        function applyBudgetChange() {
+            const adjustment = parseFloat(document.getElementById('budgetAdjustment').value);
+            const operation = document.getElementById('budgetOperation').value;
+            const currentBudget = parseFloat(document.getElementById('pd-budget').textContent.replace(/[^0-9.-]+/g, ''));
+            const budgetEditMessage = document.getElementById('budgetEditMessage');
+            
+            if (isNaN(adjustment) || adjustment <= 0) {
+                budgetEditMessage.textContent = 'Please enter a valid amount.';
+                budgetEditMessage.style.color = '#d32f2f';
+                return;
+            }
+
+            let newBudget;
+            if (operation === 'add') {
+                newBudget = currentBudget + adjustment;
+            } else {
+                if (adjustment > currentBudget) {
+                    budgetEditMessage.textContent = 'Cannot subtract more than the current budget.';
+                    budgetEditMessage.style.color = '#d32f2f';
+                    return;
+                }
+                newBudget = currentBudget - adjustment;
+            }
+
+            // Get user key (admin-user or current user's UID)
+            const isAdmin = localStorage.getItem('isAdmin') === 'true';
+            const userKey = isAdmin ? 'admin-user' : (firebase.auth().currentUser ? firebase.auth().currentUser.uid : null);
+            const projectId = document.getElementById('projectDetailView').getAttribute('data-project-id');
+            
+            if (!userKey || !projectId) {
+                budgetEditMessage.textContent = 'Error: User or project not found.';
+                budgetEditMessage.style.color = '#d32f2f';
+                return;
+            }
+
+            // Show loading state
+            budgetEditMessage.textContent = 'Updating budget...';
+            budgetEditMessage.style.color = '#666';
+
+            // Update the budget in Firebase
+            const projectRef = firebase.database().ref(`projects/${userKey}/${projectId}`);
+            
+            // First verify the project exists
+            projectRef.once('value')
+                .then((snapshot) => {
+                    if (!snapshot.exists()) {
+                        throw new Error('Project not found');
+                    }
+                    return projectRef.update({
+                        budget: newBudget,
+                        lastUpdated: firebase.database.ServerValue.TIMESTAMP
+                    });
+                })
+                .then(() => {
+                    // Add to budget history
+                    const historyRef = firebase.database().ref(`projects/${userKey}/${projectId}/budgetHistory`).push();
+                    return historyRef.set({
+                        amount: adjustment,
+                        operation: operation,
+                        previousBudget: currentBudget,
+                        newBudget: newBudget,
+                        timestamp: firebase.database.ServerValue.TIMESTAMP,
+                        updatedBy: firebase.auth().currentUser?.email || localStorage.getItem('userEmail') || 'Unknown'
+                    });
+                })
+                .then(() => {
+                    // Only update UI after all Firebase operations are successful
+                    document.getElementById('pd-budget').textContent = `₱${newBudget.toLocaleString()}`;
+                    document.getElementById('currentBudgetDisplay').textContent = `₱${newBudget.toLocaleString()}`;
+                    budgetEditMessage.textContent = 'Budget updated successfully!';
+                    budgetEditMessage.style.color = '#388e3c';
+                    
+                    // Clear the form
+                    document.getElementById('budgetAdjustment').value = '';
+                    
+                    // Refresh the budget chart
+                    loadBudgetLineChart(projectId);
+                })
+                .catch((error) => {
+                    console.error('Error in budget update process:', error);
+                    // Check if the budget was actually updated despite the error
+                    projectRef.once('value')
+                        .then((snapshot) => {
+                            const currentBudget = snapshot.val()?.budget;
+                            if (currentBudget === newBudget) {
+                                // Budget was actually updated successfully
+                                document.getElementById('pd-budget').textContent = `₱${newBudget.toLocaleString()}`;
+                                document.getElementById('currentBudgetDisplay').textContent = `₱${newBudget.toLocaleString()}`;
+                                budgetEditMessage.textContent = 'Budget updated successfully!';
+                                budgetEditMessage.style.color = '#388e3c';
+                                document.getElementById('budgetAdjustment').value = '';
+                                loadBudgetLineChart(projectId);
+                            } else {
+                                // Show specific error message based on the error type
+                                if (error.message === 'Project not found') {
+                                    budgetEditMessage.textContent = 'Error: Project not found.';
+                                } else if (error.code === 'PERMISSION_DENIED') {
+                                    budgetEditMessage.textContent = 'Error: You do not have permission to update this budget.';
+                                } else {
+                                    budgetEditMessage.textContent = 'Error updating budget. Please try again.';
+                                }
+                                budgetEditMessage.style.color = '#d32f2f';
+                            }
+                        });
+                });
+        }
+
+        // Helper function to get current project ID
+        function getCurrentProjectId() {
+            // This should return the ID of the currently viewed project
+            // You might need to modify this based on how you're tracking the current project
+            return window.currentProjectId;
+        }
     </script>
     <style>
         * {
@@ -366,8 +494,7 @@
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="logo">
-            <img src="images/logopms.png" alt="QUILL Logo">
-            <span>QUILL</span>
+            <img src="logopms.png" alt="QUILL" style="height: 40px; margin-right: 10px;">
         </div>
         <ul class="nav-menu">
             <a href="#" class="nav-item active">
@@ -537,6 +664,40 @@
                                 <div style="font-weight: 500; margin-bottom: 8px;">Status</div>
                                 <div id="pd-status" style="color: #666;">Project status</div>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Edit Budget Section -->
+                    <div style="margin-top: 24px; border-top: 1px solid #eee; padding-top: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h3 style="font-size: 18px; margin: 0;">Budget Management</h3>
+                            <button onclick="toggleBudgetEdit()" style="padding: 8px 16px; background: #000; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                                <i class="fas fa-edit"></i> Edit Budget
+                            </button>
+                        </div>
+                        <div id="budgetEditSection" style="display: none; background: #f9f9f9; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                            <div style="display: flex; gap: 16px; align-items: center;">
+                                <div style="flex: 1;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 500;">Current Budget</label>
+                                    <div id="currentBudgetDisplay" style="font-size: 18px; color: #333;"></div>
+                                </div>
+                                <div style="flex: 1;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 500;">Adjustment Amount</label>
+                                    <input type="number" id="budgetAdjustment" placeholder="Enter amount" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                                </div>
+                                <div style="flex: 1;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 500;">Operation</label>
+                                    <select id="budgetOperation" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                                        <option value="add">Add to Budget</option>
+                                        <option value="subtract">Subtract from Budget</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 8px; margin-top: 16px;">
+                                <button onclick="applyBudgetChange()" style="flex: 1; padding: 8px 16px; background: #000; color: #fff; border: none; border-radius: 4px; cursor: pointer;">Apply Changes</button>
+                                <button onclick="cancelBudgetEdit()" style="flex: 1; padding: 8px 16px; background: #fff; color: #666; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">Cancel</button>
+                            </div>
+                            <div id="budgetEditMessage" style="margin-top: 8px; font-size: 14px;"></div>
                         </div>
                     </div>
 
@@ -1320,7 +1481,7 @@
             localStorage.removeItem('tempPhone');
             
             // Redirect to login page
-            window.location.href = 'index.html';
+            window.location.href = 'index2.html';
         }
 
         // Add this code at the end of the DOMContentLoaded event listener:
@@ -1348,7 +1509,7 @@
             localStorage.removeItem('isAdmin');
             localStorage.removeItem('tempPhone');
             // Redirect to login page
-            window.location.href = 'index.html';
+            window.location.href = 'index2.html';
         }
 
         // Add a function to load user data for projects that ensures we're using the correct email from Firebase
@@ -2051,7 +2212,7 @@
             localStorage.removeItem('tempPhone');
             
             // Redirect to login page
-            window.location.href = 'index.html';
+            window.location.href = 'index2.html';
         }
 
         // Add this new function to load company members
@@ -2141,39 +2302,52 @@
             // Set current project ID
             document.getElementById('projectDetailView').setAttribute('data-project-id', project._id);
             
-            // Update project details
-            document.getElementById('projectDetailTitle').textContent = project.name || 'Untitled Project';
-            document.getElementById('pd-description').textContent = project.description || 'No description provided';
-            document.getElementById('pd-type').textContent = project.type || 'Not specified';
-            document.getElementById('pd-duration').textContent = project.duration || 'Not specified';
-            document.getElementById('pd-date').textContent = project.date ? new Date(project.date).toLocaleDateString() : 'Not specified';
-            document.getElementById('pd-budget').textContent = project.budget ? '₱' + project.budget : 'Not specified';
-            document.getElementById('pd-location').textContent = project.location || 'Not specified';
-            document.getElementById('pd-leader').textContent = project.leader || 'Not specified';
-            document.getElementById('pd-status').textContent = project.status || 'Active';
+            // Get user key (admin-user or current user's UID)
+            const isAdmin = localStorage.getItem('isAdmin') === 'true';
+            const userKey = isAdmin ? 'admin-user' : (firebase.auth().currentUser ? firebase.auth().currentUser.uid : null);
             
-            // Set progress bar
-            const progress = project.progress || 0;
-            document.getElementById('pd-progress-bar').style.width = progress + '%';
-            document.getElementById('pd-progress').textContent = progress + '%';
-            
-            // Load team members
-            loadTeamMembers(project._id);
-            
-            // Load tasks in real-time
-            loadProjectTasksRealtime(project._id);
-            
-            // Load chat messages in real-time
-            loadProjectChatRealtime(project._id);
-            // In your function that opens the project detail view (e.g., showProjectFullView or openProjectViewModal), after loading the project, call:
-            // renderBudgetHistoryTable(projectId);
-            // ... existing code ...
-            // 2. Add the renderBudgetDeductionsTable function to your script:
-            getUserKeyByEmail(document.getElementById('sidebarUserEmail').textContent, function(userKey) { 
-                renderBudgetDeductionsTable(project._id, userKey); 
-                // Add this line:
-                loadProjectFilesListDetail(project._id, userKey);
-            });
+            if (!userKey) {
+                console.error('User key not found');
+                return;
+            }
+
+            // Load project data from Firebase
+            firebase.database().ref(`projects/${userKey}/${project._id}`).once('value')
+                .then(snapshot => {
+                    const projectData = snapshot.val();
+                    if (!projectData) {
+                        console.error('Project data not found');
+                        return;
+                    }
+
+                    // Update project details
+                    document.getElementById('projectDetailTitle').textContent = projectData.name || 'Untitled Project';
+                    document.getElementById('pd-description').textContent = projectData.description || 'No description provided';
+                    document.getElementById('pd-type').textContent = projectData.type || 'Not specified';
+                    document.getElementById('pd-duration').textContent = projectData.duration || 'Not specified';
+                    document.getElementById('pd-date').textContent = projectData.date ? new Date(projectData.date).toLocaleDateString() : 'Not specified';
+                    document.getElementById('pd-budget').textContent = projectData.budget ? '₱' + projectData.budget : 'Not specified';
+                    document.getElementById('pd-location').textContent = projectData.location || 'Not specified';
+                    document.getElementById('pd-leader').textContent = projectData.leader || 'Not specified';
+                    document.getElementById('pd-status').textContent = projectData.status || 'Active';
+                    
+                    // Set progress bar
+                    const progress = projectData.progress || 0;
+                    document.getElementById('pd-progress-bar').style.width = progress + '%';
+                    document.getElementById('pd-progress').textContent = progress + '%';
+                    
+                    // Load team members
+                    loadTeamMembers(project._id);
+                    
+                    // Load tasks in real-time
+                    loadProjectTasksRealtime(project._id);
+                    
+                    // Load budget history
+                    loadBudgetLineChart(project._id);
+                })
+                .catch(error => {
+                    console.error('Error loading project data:', error);
+                });
         }
 
         function loadProjectTasksRealtime(projectId) {
